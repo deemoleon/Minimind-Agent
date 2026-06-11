@@ -1,0 +1,29 @@
+model:
+  mock: true
+  model_path: ""
+  backend: "mock"
+  max_tokens: 2048
+  temperature: 0.7
+
+server:
+  host: "0.0.0.0"
+  port: 8000
+
+memory:
+  backend: "chromadb"
+  persist_dir: "./data/memory"
+  collection_name: "minimind_agent"
+  embedding_model: "all-MiniLM-L6-v2"
+
+agent:
+  max_rounds: 10
+  retry_count: 3
+  system_prompt: "你是 MiniMind Agent，一个智能助手。你可以使用工具来完成任务。"
+
+tools:
+  mcp_servers: []
+  enabled:
+    - get_time
+    - read_file
+    - run_shell
+    - web_search
