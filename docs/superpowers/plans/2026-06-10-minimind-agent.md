@@ -1322,12 +1322,192 @@ python main.py --webui
 
 ---
 
+## Task 10: 流式输出（SSE Streaming）
+
+**Files:**
+- Modify: `E:\Vibecoding\Agent\mock_model.py`
+- Modify: `E:\Vibecoding\Agent\serve.py`
+- Modify: `E:\Vibecoding\Agent\agent.py`
+- Modify: `E:\Vibecoding\Agent\main.py`
+
+- [x] **Step 1: mock_model.py — 新增 stream_generate()**
+
+```python
+def stream_generate(
+    self,
+    messages: List[dict],
+    tools: Optional[List[dict]] = None,
+):
+    """流式生成，yield 每个 token"""
+    import time
+
+    if tools:
+        result = self.generate(messages, tools=tools)
+        yield {"type": "tool_calls", "data": result}
+        return
+
+    last_msg = messages[-1] if messages else {}
+    content = last_msg.get("content", "") if isinstance(last_msg, dict) else ""
+    text = self._generate_text(content, messages)
+
+    for char in text:
+        yield {"type": "chunk", "data": char}
+        time.sleep(0.05)
+
+    yield {"type": "done", "data": ""}
+```
+
+- [x] **Step 2: serve.py — 新增 SSE 响应**
+
+```python
+from fastapi.responses import StreamingResponse
+
+async def stream_chat(request: ChatCompletionRequest):
+    """SSE 流式生成器"""
+    messages = [msg.dict(exclude_none=True) for msg in request.messages]
+    tools_schema = request.tools
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    for chunk in model.stream_generate(messages, tools=tools_schema):
+        if chunk["type"] == "tool_calls":
+            tool_call = {
+                "id": f"call_{uuid.uuid4().hex[:12]}",
+                "type": "function",
+                "function": {
+                    "name": chunk["data"]["name"],
+                    "arguments": json.dumps(chunk["data"].get("arguments", {}), ensure_ascii=False),
+                },
+            }
+            sse_chunk = {
+                "id": chat_id,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": {"tool_calls": [tool_call]}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(sse_chunk, ensure_ascii=False)}\n\n"
+        elif chunk["type"] == "chunk":
+            sse_chunk = {
+                "id": chat_id,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": {"content": chunk["data"]}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(sse_chunk, ensure_ascii=False)}\n\n"
+        elif chunk["type"] == "done":
+            yield "data: [DONE]\n\n"
+            return
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: ChatCompletionRequest):
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded")
+    if request.stream:
+        return StreamingResponse(stream_chat(request), media_type="text/event-stream")
+    # ... 原有非流式逻辑
+```
+
+- [x] **Step 3: agent.py — 新增 chat_stream()**
+
+```python
+def chat_stream(self, user_input: str):
+    """流式对话，yield 每个 token"""
+    self._store_message("user", user_input)
+    messages = self._build_messages(user_input)
+    tools_schema = get_tools_schema(mock_mode=self.mock_mode)
+
+    for round_num in range(self.max_rounds):
+        tool_calls_acc = None
+        content_acc = ""
+
+        for chunk in self._call_model_stream(messages, tools_schema):
+            if chunk["type"] == "chunk":
+                content_acc += chunk["data"]
+                yield {"type": "chunk", "data": chunk["data"]}
+            elif chunk["type"] == "tool_calls":
+                tool_calls_acc = chunk["data"]
+            elif chunk["type"] == "done":
+                break
+
+        if tool_calls_acc:
+            tool_results = self._execute_tools(tool_calls_acc)
+            for tr in tool_results:
+                self._store_message("tool", tr["content"], tool_call_id=tr["tool_call_id"])
+                messages.append({"role": "tool", "content": tr["content"], "tool_call_id": tr["tool_call_id"]})
+            continue
+
+        self._store_message("assistant", content_acc)
+        yield {"type": "done", "data": ""}
+        return
+
+    yield {"type": "done", "data": ""}
+
+def _call_model_stream(self, messages, tools):
+    """流式调用推理服务，yield SSE 解析后的 chunk"""
+    import httpx
+    payload = {"model": "minimind", "messages": messages, "tools": tools if tools else None, "stream": True}
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    with httpx.Client(timeout=60) as client:
+        with client.stream("POST", f"{self.server_url}/v1/chat/completions", json=payload) as resp:
+            for line in resp.iter_lines():
+                if not line or not line.startswith("data: "):
+                    continue
+                data_str = line[6:]
+                if data_str == "[DONE]":
+                    yield {"type": "done", "data": ""}
+                    return
+                try:
+                    data = json.loads(data_str)
+                    delta = data["choices"][0].get("delta", {})
+                    if "content" in delta:
+                        yield {"type": "chunk", "data": delta["content"]}
+                    if "tool_calls" in delta:
+                        yield {"type": "tool_calls", "data": delta["tool_calls"]}
+                except json.JSONDecodeError:
+                    continue
+```
+
+- [x] **Step 4: main.py — CLI 和 WebUI 流式显示**
+
+```python
+def cli_mode(config, server_url):
+    agent = create_agent(config, server_url)
+    print("MiniMind Agent CLI (流式模式)")
+    while True:
+        user_input = input("\n你: ").strip()
+        if user_input.lower() in ("quit", "exit", "q"):
+            break
+        print("\nAgent: ", end="", flush=True)
+        for chunk in agent.chat_stream(user_input):
+            if chunk["type"] == "chunk":
+                print(chunk["data"], end="", flush=True)
+        print()
+
+def webui_mode(config, server_url):
+    agent = create_agent(config, server_url)
+
+    def respond(message, chat_history):
+        chat_history.append((message, ""))
+        for chunk in agent.chat_stream(message):
+            if chunk["type"] == "chunk":
+                chat_history[-1] = (message, chat_history[-1][1] + chunk["data"])
+                yield "", chat_history
+```
+
+- [x] **Step 5: 验证**
+
+```bash
+python test_api.py    # 确保原有 7 个测试仍通过
+python serve.py       # 启动服务（另一个终端）
+python main.py --cli  # 测试流式输出
+```
+
+---
+
 ## Self-Review
 
-**Spec coverage:** ✅ All 8 deliverables covered (config.yaml, mock_model.py, serve.py, tools.py, agent.py, memory.py, main.py, test_api.py, startup scripts)
+**Spec coverage:** ✅ All 9 deliverables covered (config.yaml, mock_model.py, serve.py, tools.py, agent.py, memory.py, main.py, test_api.py, startup scripts) + streaming (SSE)
 
 **Placeholder scan:** ✅ No TBD/TODO/placeholders found. All steps contain complete code.
 
-**Type consistency:** ✅ MockModel.generate() returns str|dict consistently. serve.py converts dict→JSON string for arguments. agent.py calls serve.py via HTTP. Memory store/search API consistent.
+**Type consistency:** ✅ MockModel.generate() returns str|dict consistently. mock_model.stream_generate() yields chunks. serve.py converts dict→JSON string for arguments and handles SSE streaming. agent.py calls serve.py via HTTP with both sync and streaming. Memory store/search API consistent.
 
-**Execution order:** Config → tools → mock_model → serve → memory → agent → main → test → scripts. Each task depends only on previous tasks.
+**Execution order:** Config → tools → mock_model → serve → memory → agent → main → test → scripts → streaming. Each task depends only on previous tasks.

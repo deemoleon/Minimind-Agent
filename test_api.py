@@ -124,6 +124,35 @@ def test_model_not_loaded():
     test("POST /v1/chat/completions (模型未加载)", True, "跳过（模型已加载）")
 
 
+def test_stream_text():
+    """测试 SSE 流式输出（纯文本）"""
+    try:
+        resp = httpx.post(
+            f"{BASE_URL}/v1/chat/completions",
+            json={
+                "model": "minimind",
+                "messages": [{"role": "user", "content": "你好"}],
+                "stream": True,
+            },
+            timeout=30,
+        )
+        passed = resp.status_code == 200
+        if not passed:
+            test("POST /v1/chat/completions (stream 纯文本)", passed, f"状态码: {resp.status_code}")
+            return
+
+        lines = resp.text.strip().split("\n")
+        has_done = any("data: [DONE]" in line for line in lines)
+        has_data = any(line.startswith("data: ") and "[DONE]" not in line for line in lines)
+
+        passed = has_data and has_done
+        chunks = [line for line in lines if line.startswith("data: ") and "[DONE]" not in line]
+        test("POST /v1/chat/completions (stream 纯文本)", passed,
+             f"data chunks: {len(chunks)}, has [DONE]: {has_done}")
+    except Exception as e:
+        test("POST /v1/chat/completions (stream 纯文本)", False, str(e))
+
+
 def main():
     print("=" * 50)
     print("MiniMind API 测试")
@@ -136,6 +165,7 @@ def main():
     test_chat_tool_result()
     test_bad_request()
     test_model_not_loaded()
+    test_stream_text()
 
     print("=" * 50)
     passed = sum(1 for r in results if r["passed"])

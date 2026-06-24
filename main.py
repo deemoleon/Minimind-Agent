@@ -24,11 +24,11 @@ def load_config() -> dict:
 
 
 def cli_mode(config: dict, server_url: str):
-    """CLI 交互模式"""
+    """CLI 交互模式（流式）"""
     from agent import create_agent
 
     agent = create_agent(config, server_url)
-    print("MiniMind Agent CLI (输入 'quit' 或 'exit' 退出)")
+    print("MiniMind Agent CLI (流式模式)")
     print("-" * 50)
 
     while True:
@@ -40,8 +40,11 @@ def cli_mode(config: dict, server_url: str):
             if not user_input:
                 continue
 
-            response = agent.chat(user_input)
-            print(f"\nAgent: {response}")
+            print("\nAgent: ", end="", flush=True)
+            for chunk in agent.chat_stream(user_input):
+                if chunk["type"] == "chunk":
+                    print(chunk["data"], end="", flush=True)
+            print()
 
         except KeyboardInterrupt:
             print("\n再见！")
@@ -51,17 +54,19 @@ def cli_mode(config: dict, server_url: str):
 
 
 def webui_mode(config: dict, server_url: str):
-    """Gradio WebUI 模式"""
+    """Gradio WebUI 模式（流式）"""
     import gradio as gr
     from agent import create_agent
 
     agent = create_agent(config, server_url)
 
     def respond(message, chat_history):
-        """处理用户消息并返回回复"""
-        response = agent.chat(message)
-        chat_history.append((message, response))
-        return "", chat_history
+        """处理用户消息并返回回复（流式）"""
+        chat_history.append((message, ""))
+        for chunk in agent.chat_stream(message):
+            if chunk["type"] == "chunk":
+                chat_history[-1] = (message, chat_history[-1][1] + chunk["data"])
+                yield "", chat_history
 
     with gr.Blocks(title="MiniMind Agent") as demo:
         gr.Markdown("# MiniMind Agent")

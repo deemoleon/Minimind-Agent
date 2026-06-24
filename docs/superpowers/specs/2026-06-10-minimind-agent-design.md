@@ -177,9 +177,12 @@ class MockModel:
 - tool_calls → `{"choices": [{"message": {"tool_calls": [...]}}]}`
 - arguments dict → `json.dumps()` → JSON 字符串
 
-**流式支持**：
-- 代码预留 `stream=true` 分支
-- Mock 阶段不实现 SSE，但接口签名包含 `stream` 参数
+**流式支持**（已实现）：
+- Mock 模式下 `stream_generate()` 逐字符 yield，50ms 延迟模拟
+- serve.py 根据 `stream` 参数返回 `StreamingResponse`（SSE）
+- agent.py 新增 `chat_stream()` 生成器，CLI 逐字符打印，WebUI 逐字显示
+- tool_calls 不流式，一次性返回
+- 向后兼容：`stream=False` 时行为不变
 
 #### 错误处理
 

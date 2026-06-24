@@ -2,6 +2,7 @@
 
 import json
 import random
+import time
 from typing import List, Optional, Union
 
 
@@ -105,3 +106,24 @@ class MockModel:
         if tool_name == "run_shell":
             return {"command": "echo hello"}
         return {}
+
+    def stream_generate(
+        self,
+        messages: List[dict],
+        tools: Optional[List[dict]] = None,
+    ):
+        """流式生成，yield 每个 token"""
+        if tools:
+            result = self.generate(messages, tools=tools)
+            yield {"type": "tool_calls", "data": result}
+            return
+
+        last_msg = messages[-1] if messages else {}
+        content = last_msg.get("content", "") if isinstance(last_msg, dict) else ""
+        text = self._generate_text(content, messages)
+
+        for char in text:
+            yield {"type": "chunk", "data": char}
+            time.sleep(0.05)
+
+        yield {"type": "done", "data": ""}

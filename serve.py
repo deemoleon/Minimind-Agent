@@ -9,6 +9,7 @@ from typing import List, Optional
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from mock_model import MockModel
@@ -115,10 +116,49 @@ def list_models():
     }
 
 
+async def stream_chat(request: ChatCompletionRequest):
+    """SSE 流式生成器"""
+    messages = [msg.dict(exclude_none=True) for msg in request.messages]
+    tools_schema = request.tools
+    chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
+
+    for chunk in model.stream_generate(messages, tools=tools_schema):
+        if chunk["type"] == "tool_calls":
+            tool_call = {
+                "id": f"call_{uuid.uuid4().hex[:12]}",
+                "type": "function",
+                "function": {
+                    "name": chunk["data"]["name"],
+                    "arguments": json.dumps(chunk["data"].get("arguments", {}), ensure_ascii=False),
+                },
+            }
+            sse_chunk = {
+                "id": chat_id,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": {"tool_calls": [tool_call]}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(sse_chunk, ensure_ascii=False)}\n\n"
+
+        elif chunk["type"] == "chunk":
+            sse_chunk = {
+                "id": chat_id,
+                "model": request.model,
+                "choices": [{"index": 0, "delta": {"content": chunk["data"]}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(sse_chunk, ensure_ascii=False)}\n\n"
+
+        elif chunk["type"] == "done":
+            yield "data: [DONE]\n\n"
+            return
+
+
 @app.post("/v1/chat/completions")
 def chat_completions(request: ChatCompletionRequest):
     if model is None:
         raise HTTPException(status_code=503, detail="Model not loaded")
+
+    if request.stream:
+        return StreamingResponse(stream_chat(request), media_type="text/event-stream")
 
     messages = [msg.dict(exclude_none=True) for msg in request.messages]
     tools_schema = request.tools

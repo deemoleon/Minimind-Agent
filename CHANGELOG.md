@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0] - 2026-06-24
+
+### Added
+- SSE 流式输出全链路：mock_model.stream_generate() → serve.py StreamingResponse → agent.chat_stream() → main.py 流式显示
+- test_api.py 第 8 个测试：test_stream_text（验证 SSE 格式和 [DONE] 标记）
+- docs/analysis-summary.md 七大功能深度分析（含 SSE 流式 Section 8）
+- docs/superpowers/specs/2026-06-24-streaming-design.md 流式功能设计文档
+
+### Changed
+- serve.py：stream=True 时返回 StreamingResponse（SSE 协议）
+- agent.py：新增 chat_stream() 和 _call_model_stream()，保留 chat() 同步方法
+- main.py：CLI 逐字符打印，WebUI Gradio generator 逐字显示
+
 ## [0.1.0] - 2026-06-11
 
 ### Added

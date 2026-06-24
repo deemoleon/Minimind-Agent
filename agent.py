@@ -160,6 +160,77 @@ class Agent:
         except Exception:
             return False
 
+    def chat_stream(self, user_input: str):
+        """流式对话，yield 每个 token"""
+        self._store_message("user", user_input)
+        messages = self._build_messages(user_input)
+        tools_schema = get_tools_schema(mock_mode=self.mock_mode)
+
+        for round_num in range(self.max_rounds):
+            tool_calls_acc = None
+            content_acc = ""
+
+            for chunk in self._call_model_stream(messages, tools_schema):
+                if chunk["type"] == "chunk":
+                    content_acc += chunk["data"]
+                    yield {"type": "chunk", "data": chunk["data"]}
+                elif chunk["type"] == "tool_calls":
+                    tool_calls_acc = chunk["data"]
+                elif chunk["type"] == "done":
+                    break
+
+            if tool_calls_acc:
+                tool_results = self._execute_tools(tool_calls_acc)
+                for tr in tool_results:
+                    self._store_message("tool", tr["content"], tool_call_id=tr["tool_call_id"])
+                    messages.append({"role": "tool", "content": tr["content"], "tool_call_id": tr["tool_call_id"]})
+                continue
+
+            self._store_message("assistant", content_acc)
+            yield {"type": "done", "data": ""}
+            return
+
+        yield {"type": "done", "data": ""}
+
+    def _call_model_stream(self, messages: List[dict], tools: List[dict]):
+        """流式调用推理服务，yield SSE 解析后的 chunk"""
+        payload = {
+            "model": "minimind",
+            "messages": messages,
+            "tools": tools if tools else None,
+            "stream": True,
+        }
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        for attempt in range(self.retry_count):
+            try:
+                with httpx.Client(timeout=60) as client:
+                    with client.stream("POST", f"{self.server_url}/v1/chat/completions", json=payload) as resp:
+                        for line in resp.iter_lines():
+                            if not line or not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                yield {"type": "done", "data": ""}
+                                return
+                            try:
+                                data = json.loads(data_str)
+                                delta = data["choices"][0].get("delta", {})
+                                if "content" in delta:
+                                    yield {"type": "chunk", "data": delta["content"]}
+                                if "tool_calls" in delta:
+                                    yield {"type": "tool_calls", "data": delta["tool_calls"]}
+                            except (json.JSONDecodeError, KeyError, IndexError):
+                                continue
+                return
+            except Exception as e:
+                if attempt < self.retry_count - 1:
+                    time.sleep(0.5)
+                else:
+                    yield {"type": "chunk", "data": f"[错误] 流式调用失败: {str(e)}"}
+                    yield {"type": "done", "data": ""}
+                    return
+
 
 def create_agent(config: dict, server_url: str = "http://localhost:8000") -> Agent:
     """工厂函数创建 Agent"""
