@@ -1,26 +1,27 @@
 @echo off
+chcp 65001 >nul
 cd /d %~dp0
 title MiniMind Agent - Install
-
-set "PYTHON=C:\Users\64987\anaconda3\python.exe"
 
 echo ========================================
 echo  Install Dependencies
 echo ========================================
 echo.
 
-%PYTHON% --version
-if errorlevel 1 (
-    set "PYTHON=python"
-    python --version
+if not exist venv\Scripts\python.exe (
+    echo [1/2] Creating virtual environment...
+    py -3.12 -m venv venv
     if errorlevel 1 (
-        echo [ERROR] Python not found.
+        echo [ERROR] Failed to create venv. Check Python installation.
         pause
         exit /b 1
     )
+) else (
+    echo [INFO] venv already exists, skip creation
 )
 
-%PYTHON% -m pip install -r requirements.txt
+echo [2/2] Installing dependencies...
+.\venv\Scripts\python.exe -m pip install -r requirements.txt
 if errorlevel 1 (
     echo.
     echo [ERROR] Install failed. Check your network.
