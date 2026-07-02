@@ -49,77 +49,205 @@ python main.py --cli    # CLI 模式
 
 ## 接入真实模型
 
-### 1. 获取模型文件
+### 核心接口
 
-从 HuggingFace 下载 MiniMind3 权重：
+`model_adapter.py` 的 `RealModel` 类对外暴露与 `MockModel` 完全一致的接口：
 
-```bash
-# 方法 1: git clone（推荐，约 300MB）
-git clone https://huggingface.co/jingyaogong/minimind-3 models/minimind-fc
-
-# 方法 2: 手动下载
-# 需要以下 4 个文件：
-#   config.json              ← 模型架构配置（Qwen3）
-#   full_sft_768.pth         ← 训练权重（137MB）
-#   tokenizer.json           ← 分词器
-#   tokenizer_config.json    ← 分词器配置
+```python
+class RealModel:
+    def __init__(self, config: dict)     # config 来自 config.yaml
+    def generate(messages, tools)        # 返回 str（纯文本）或 dict（工具调用）
+    def stream_generate(messages, tools) # 逐 token yield
+    def is_loaded -> bool                # 模型是否加载成功
 ```
 
-### 2. 放置模型文件
+serve.py 不关心模型内部实现，只调用这两个方法。**只要你的模型能实现 `generate()` 和 `stream_generate()`，就能接入本系统。**
 
-将文件放入 `models/minimind-fc/` 目录：
+---
+
+### 场景 1：接入 .pth 权重（MiniMind3 示例）
+
+适用于 PyTorch 训练产出的 `.pth` 文件。
+
+**Step 1：准备文件**
+
+```bash
+# 从 HuggingFace 下载
+git clone https://huggingface.co/jingyaogong/minimind-3 models/minimind-fc
+```
+
+目录结构：
 
 ```
 models/minimind-fc/
-├── config.json              # 必须：Qwen3 架构配置
-├── full_sft_768.pth         # 必须：训练权重
-├── tokenizer.json           # 必须：分词器
-└── tokenizer_config.json    # 必须：分词器配置
+├── config.json              # 架构配置（model_type: "qwen3"）
+├── full_sft_768.pth         # 训练权重（137MB）
+├── tokenizer.json           # 分词器
+└── tokenizer_config.json    # 分词器配置
 ```
 
-**注意**：`config.json` 必须与 `.pth` 权重匹配。MiniMind3 使用 Qwen3 架构，`config.json` 中的 `model_type` 应为 `"qwen3"`。
+**关键**：`config.json` 必须与 `.pth` 权重匹配。查看 `config.json` 中的 `model_type` 确认架构：
 
-### 3. 修改配置
+```json
+{
+  "model_type": "qwen3",                          // ← 架构类型
+  "architectures": ["Qwen3ForCausalLM"],          // ← 模型类名
+  "hidden_size": 768,
+  "num_hidden_layers": 8
+}
+```
 
-编辑 `config.yaml`：
+**Step 2：修改 config.yaml**
 
 ```yaml
 model:
-  mock: false                              # 关闭 Mock
-  model_path: "models/minimind-fc/"        # 指向模型目录
+  mock: false
+  model_path: "models/minimind-fc/"   # 指向包含 config.json + .pth 的目录
 ```
 
-`model_adapter.py` 支持三种加载模式，`model_path` 自动识别：
-
-| model_path 指向 | 加载方式 | 需要的文件 |
-|----------------|---------|-----------|
-| 目录（如 `models/minimind-fc/`） | 自动找 `*.pth`，优先 `full_sft_*.pth` | config.json + .pth + tokenizer |
-| `.pth` 文件 | 直接加载 PyTorch 权重 | config.json（同目录）+ .pth |
-| HF 格式目录 | `from_pretrained()` 加载 | config.json + model.safetensors + tokenizer |
-
-### 4. 启动验证
+**Step 3：启动**
 
 ```bash
-# 启动服务
 start_serve.bat
-
-# 运行真实模型测试（3 个额外测试）
 python test_api.py --real
-
-# 预期输出：10/11 通过
 ```
 
-### 5. 代码适配说明
+`model_adapter.py` 的加载流程（`_load_pth_model()`，共 4 步）：
 
-如果你使用**非 MiniMind3 的模型**（如 Llama、Mistral），需要修改 `model_adapter.py`：
+```
+config.json → AutoConfig.from_pretrained()         → Qwen3Config
+Qwen3Config → AutoModelForCausalLM.from_config()    → 空模型结构
+full_sft_768.pth → load_state_dict()                → 填充权重
+tokenizer.json → AutoTokenizer.from_pretrained()    → 分词器
+```
 
-| 场景 | 需要改什么 |
-|------|-----------|
-| 模型架构不同（非 Qwen3） | `_load_pth_model()` 中 `AutoModelForCausalLM.from_config()` 会自动适配，只要 `config.json` 正确 |
-| 分词器不同 | `_load_pth_model()` 已用 `AutoTokenizer`，自动适配 |
-| 工具调用格式不同 | `_parse_tool_call()` 中的正则表达式需要调整（当前匹配 `<tool_call>...</tool_call>`） |
-| 使用 HF safetensors 格式 | 直接用 `_load_hf_model()`，`model_path` 指向包含 `model.safetensors` 的目录 |
-| 需要 GPU 显存优化 | 修改 `_load_pth_model()` 中的 `dtype`（当前 FP16，可改 INT8/INT4） |
+---
+
+### 场景 2：接入 HuggingFace 格式模型
+
+适用于 `from_pretrained()` 标准格式（`model.safetensors` 或 `pytorch_model.bin`）。
+
+**Step 1：准备文件**
+
+```
+models/my-model/
+├── config.json              # 架构配置
+├── model.safetensors        # 模型权重（或 pytorch_model.bin）
+├── tokenizer.json           # 分词器
+└── tokenizer_config.json    # 分词器配置
+```
+
+**Step 2：修改 config.yaml**
+
+```yaml
+model:
+  mock: false
+  model_path: "models/my-model/"   # 指向 HF 格式目录
+```
+
+**Step 3：代码不需要改**
+
+`model_adapter.py` 自动识别：目录内没有 `.pth` 文件时，走 `_load_hf_model()` 路径，直接调用 `from_pretrained()`。
+
+---
+
+### 场景 3：接入其他架构（Llama / Mistral / ChatGLM）
+
+适用于非 Qwen3 架构的模型。
+
+**需要改的地方**：
+
+| 文件 | 函数 | 改什么 | 原因 |
+|------|------|--------|------|
+| `model_adapter.py` | `_parse_tool_call()` | 修改正则表达式 | 不同模型的工具调用格式不同 |
+
+当前 `_parse_tool_call()` 匹配 MiniMind3 的格式：
+
+```python
+# 当前格式
+<tool_call>
+{"name": "get_time", "arguments": {"timezone": "UTC"}}
+</tool_call>
+```
+
+如果你的模型用 OpenAI 格式（`{"tool_calls": [...]}`），需要改正则：
+
+```python
+# OpenAI 格式示例
+def _parse_tool_call(self, text: str, tools: list) -> dict:
+    import json
+    try:
+        data = json.loads(text)
+        if "tool_calls" in data:
+            tc = data["tool_calls"][0]
+            return {"name": tc["function"]["name"],
+                    "arguments": json.loads(tc["function"]["arguments"])}
+    except (json.JSONDecodeError, KeyError, IndexError):
+        pass
+    return None
+```
+
+**不需要改的地方**：
+
+- `_load_hf_model()` / `_load_pth_model()` — `AutoModelForCausalLM` 自动适配任何 HF 支持的架构
+- `generate()` / `stream_generate()` — 接口不变，内部自动处理
+- `serve.py` / `agent.py` / `tools.py` — 完全不动
+
+---
+
+### 场景 4：接入 ChatGPT / Claude 等 API 模型
+
+适用于通过 API 调用的闭源模型，不需要本地 GPU。
+
+**需要改的地方**：
+
+| 文件 | 函数 | 改什么 |
+|------|------|--------|
+| `model_adapter.py` | `_load_model()` | 改为初始化 API 客户端 |
+| `model_adapter.py` | `generate()` | 改为调用 API |
+| `model_adapter.py` | `stream_generate()` | 改为 API 流式调用 |
+
+示例：
+
+```python
+class RealModel:
+    def __init__(self, config):
+        self.api_key = config.get("api_key", "")
+        self.base_url = config.get("base_url", "https://api.openai.com/v1")
+        self.model_name = config.get("model_name", "gpt-4")
+        self._loaded = True
+
+    def generate(self, messages, tools=None):
+        import httpx
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "tools": tools,
+        }
+        resp = httpx.post(f"{self.base_url}/chat/completions",
+                          json=payload,
+                          headers={"Authorization": f"Bearer {self.api_key}"})
+        data = resp.json()
+        return data["choices"][0]["message"]
+
+    def stream_generate(self, messages, tools=None):
+        # ... 流式实现
+        yield {"type": "chunk", "data": token}
+        yield {"type": "done", "data": ""}
+```
+
+---
+
+### 加载模式速查
+
+`model_path` 自动识别，无需手动指定格式：
+
+| model_path | 加载路径 | 需要的文件 |
+|-----------|---------|-----------|
+| 目录，内有 `.pth` | `_load_pth_model()` | config.json + .pth + tokenizer |
+| 目录，无 `.pth` | `_load_hf_model()` | config.json + model.safetensors + tokenizer |
+| `.pth` 文件路径 | `_load_pth_model()` | config.json（同目录）+ .pth |
+| 其他 | `_load_hf_model()` | 同上 |
 
 ## 系统架构
 
