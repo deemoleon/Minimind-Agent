@@ -29,8 +29,17 @@ Desktop.ini
 data/memory/
 *.sqlite3
 models/minimind-fc/
+models/config.json
+models/full_sft_768.pth
+models/tokenizer.json
+models/tokenizer_config.json
 *.log
+tmp/
 
 # Temporary
 *.tmp
 *.bak
+
+# Personal docs
+docs/analysis-summary.md
+docs/superpowers/

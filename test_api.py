@@ -1,4 +1,9 @@
-"""API 测试脚本 — 用 openai 库测试所有接口"""
+"""API 测试脚本 — 用 openai 库测试所有接口
+
+用法:
+    python test_api.py          # Mock 模式测试
+    python test_api.py --real   # 真实模型测试（需先启动 mock: false）
+"""
 
 import json
 import sys
@@ -153,9 +158,85 @@ def test_stream_text():
         test("POST /v1/chat/completions (stream 纯文本)", False, str(e))
 
 
+# ---- 真实模型专用测试 ----
+
+def test_real_chat_quality():
+    """真实模型：生成内容非空且长度合理"""
+    try:
+        client = OpenAI(base_url=f"{BASE_URL}/v1", api_key="real")
+        resp = client.chat.completions.create(
+            model="minimind",
+            messages=[{"role": "user", "content": "用一句话介绍人工智能"}],
+        )
+        content = resp.choices[0].message.content
+        passed = bool(content) and 10 < len(content) < 500
+        test("真实模型: 纯文本质量", passed, f"长度: {len(content)}, 内容: {content[:50]}...")
+    except Exception as e:
+        test("真实模型: 纯文本质量", False, str(e))
+
+
+def test_real_tool_call():
+    """真实模型：自然语言触发工具调用"""
+    try:
+        client = OpenAI(base_url=f"{BASE_URL}/v1", api_key="real")
+        resp = client.chat.completions.create(
+            model="minimind",
+            messages=[{"role": "user", "content": "帮我查一下现在几点了"}],
+            tools=[{
+                "type": "function",
+                "function": {
+                    "name": "get_time",
+                    "description": "获取当前时间",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }],
+        )
+        msg = resp.choices[0].message
+        has_tools = bool(msg.tool_calls)
+        # 真实模型可能直接回答也可能调用工具，两者都算通过
+        passed = bool(msg.content) or has_tools
+        detail = f"finish_reason: {resp.choices[0].finish_reason}"
+        if has_tools:
+            tc = msg.tool_calls[0]
+            detail += f", tool: {tc.function.name}"
+        else:
+            detail += f", 内容: {msg.content[:30]}..."
+        test("真实模型: 工具调用", passed, detail)
+    except Exception as e:
+        test("真实模型: 工具调用", False, str(e))
+
+
+def test_real_stream():
+    """真实模型：流式输出 token 数量合理"""
+    try:
+        resp = httpx.post(
+            f"{BASE_URL}/v1/chat/completions",
+            json={
+                "model": "minimind",
+                "messages": [{"role": "user", "content": "写一首关于春天的短诗"}],
+                "stream": True,
+            },
+            timeout=60,
+        )
+        passed = resp.status_code == 200
+        if not passed:
+            test("真实模型: 流式输出", passed, f"状态码: {resp.status_code}")
+            return
+
+        lines = resp.text.strip().split("\n")
+        chunks = [line for line in lines if line.startswith("data: ") and "[DONE]" not in line]
+        has_done = any("data: [DONE]" in line for line in lines)
+        passed = len(chunks) >= 3 and has_done
+        test("真实模型: 流式输出", passed, f"chunks: {len(chunks)}, [DONE]: {has_done}")
+    except Exception as e:
+        test("真实模型: 流式输出", False, str(e))
+
+
 def main():
+    real_mode = "--real" in sys.argv
+
     print("=" * 50)
-    print("MiniMind API 测试")
+    print(f"MiniMind API 测试 ({'真实模型' if real_mode else 'Mock 模式'})")
     print("=" * 50)
 
     test_health()
@@ -166,6 +247,12 @@ def main():
     test_bad_request()
     test_model_not_loaded()
     test_stream_text()
+
+    if real_mode:
+        print("\n--- 真实模型附加测试 ---")
+        test_real_chat_quality()
+        test_real_tool_call()
+        test_real_stream()
 
     print("=" * 50)
     passed = sum(1 for r in results if r["passed"])

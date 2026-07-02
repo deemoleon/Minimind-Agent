@@ -49,7 +49,7 @@ model:
 ### 4. 重启服务
 
 ```bash
-start_server.bat
+start_serve.bat
 ```
 
 ### 5. 验证

@@ -1,24 +1,7 @@
 @echo off
-cd /d %~dp0
+chcp 65001 >nul
+cd /d E:\Vibecoding\Agent
 title MiniMind Agent - Start All
-
-set "PYTHON=C:\Users\64987\anaconda3\python.exe"
-
-echo ========================================
-echo  MiniMind Agent - Start All
-echo ========================================
-echo.
-
-%PYTHON% --version
-if errorlevel 1 (
-    set "PYTHON=python"
-    python --version
-    if errorlevel 1 (
-        echo [ERROR] Python not found.
-        pause
-        exit /b 1
-    )
-)
 
 netstat -ano | findstr :8000 | findstr LISTENING >nul 2>&1
 if not errorlevel 1 (
@@ -27,7 +10,7 @@ if not errorlevel 1 (
 )
 
 echo [1/2] Starting server...
-start "MiniMind-Server" %PYTHON% serve.py
+start /min "MiniMind-Server" .\venv\Scripts\python.exe serve.py
 
 echo [2/2] Waiting for server (max 30s)...
 set /a count=0
@@ -40,9 +23,8 @@ if %count% geq 30 (
     exit /b 1
 )
 curl -s http://localhost:8000/health >nul 2>nul
-if errorlevel 1 goto wait
+if errorlevel 1 goto :wait
 
-echo.
 echo Server is ready!
 
 :start_webui
@@ -50,11 +32,5 @@ echo.
 echo Starting WebUI...
 echo WebUI: http://localhost:7860
 echo Press Ctrl+C to stop
-echo.
-%PYTHON% main.py --webui
-if errorlevel 1 (
-    echo.
-    echo [ERROR] WebUI failed to start
-)
-echo.
+.\venv\Scripts\python.exe main.py --webui
 pause

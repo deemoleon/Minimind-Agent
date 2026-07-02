@@ -24,7 +24,7 @@
 - agent.py ReAct Agent（多轮工具调用、记忆读写、错误重试）
 - main.py CLI / WebUI 双入口
 - test_api.py API 测试脚本（7/7 通过）
-- install.bat / start_server.bat / start_agent.bat / start_all.bat 启动脚本
+- install.bat / start_serve.bat / start_agent.bat / start_all.bat 启动脚本
 - README.md / AGENTS.md / models/README.md 项目文档
 
 ### Notes

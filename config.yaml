@@ -1,9 +1,11 @@
 model:
-  mock: true
-  model_path: ""
+  mock: false
+  model_path: "models/minimind-fc/"  # 模型目录（含 config.json + tokenizer）
   backend: "mock"
   max_tokens: 2048
   temperature: 0.7
+  top_p: 0.85
+  top_k: 50
 
 server:
   host: "0.0.0.0"

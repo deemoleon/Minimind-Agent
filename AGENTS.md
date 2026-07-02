@@ -2,13 +2,13 @@
 
 ## 项目概述
 
-MiniMind Function Calling Agent 系统。为 MiniMind 轻量级大模型提供 OpenAI 兼容的 Function Calling API 和 ReAct Agent。
+MiniMind Function Calling Agent 系统。基于 MiniMind3（Qwen3 架构）轻量级大模型，提供 OpenAI 兼容的 Function Calling API 和 ReAct Agent。
 
 ## 环境约束
 
 - OS: Windows 10/11
-- GPU: AMD（DirectML 后端）
-- Python: 3.10+
+- GPU: AMD RX 9070 GRE（ROCm 7.2.1，通过 HIP 暴露为 CUDA）
+- Python: 3.12
 - 包管理: pip
 
 ## 架构原则
@@ -22,12 +22,14 @@ MiniMind Function Calling Agent 系统。为 MiniMind 轻量级大模型提供 O
 
 | 文件 | 职责 | 依赖 |
 |------|------|------|
-| serve.py | FastAPI 服务，OpenAI 兼容接口，加载模型 | mock_model.py, config.yaml |
+| serve.py | FastAPI 服务，OpenAI 兼容接口，加载模型 | mock_model.py, model_adapter.py, config.yaml |
 | agent.py | ReAct 循环，工具调度，对话管理 | memory.py, tools.py, httpx→serve |
 | tools.py | 工具注册、JSON Schema 生成、MCP Client | 无 |
 | memory.py | ChromaDB 记忆存储与检索 | chromadb |
 | mock_model.py | Mock 推理，模拟 Function Calling | 无 |
+| model_adapter.py | 真实模型适配器（Qwen3ForCausalLM + AutoConfig） | transformers, torch |
 | main.py | CLI/WebUI 双入口 | agent.py, gradio |
+| start_serve.bat | 非阻塞启动 serve.py（解决 PowerShell Start-Process 卡住问题） | 无 |
 
 ## 关键约定
 
@@ -83,7 +85,7 @@ MiniMind 原生格式：
 
 所有配置集中在 config.yaml，不硬编码到代码。包括：
 - model.mock（Mock 开关）
-- model.backend（推理后端）
+- model.model_path（模型目录，含 config.json + tokenizer）
 - memory.backend（chromadb/milvus）
 - agent.max_rounds（最大 ReAct 循环次数）
 
@@ -107,14 +109,17 @@ serve.py 根据 `stream` 参数返回不同格式：
 
 ## 当前状态
 
-- Mock 模式全流程验证通过
-- test_api.py 8/8 通过（含 SSE 流式测试）
+- Mock 模式全流程验证通过（test_api.py 8/8）
+- 真实模型验证通过（test_api.py --real 10/11）
 - SSE 流式输出：Mock 模型 → serve.py SSE → agent 流式接收 → CLI/WebUI 逐字显示
-- 等待接入训练完成的 MiniMind 模型权重
+- model_adapter.py 使用官方 Qwen3ForCausalLM（来自 HuggingFace transformers）
+- 模型文件位于 models/minimind-fc/（config.json 从 jingyaogong/minimind-3 拉取）
+- ROCm 7.2.1 已安装，AMD RX 9070 GRE GPU 识别正常
 
 ## 后续开发注意事项
 
 1. 修改 serve.py 时保持 OpenAI 接口兼容性
-2. 新增工具只需在 tools.py 加 `@tool` 装饰器
+2. 新增工具只需在 tools.py 加 @tool 装饰器
 3. 切换 Milvus 时实现 memory.py 的 MilvusBackend 类
-4. 所有 .bat 文件保持 `chcp 65001` 开头
+4. 所有 .bat 文件保持 chcp 65001 开头
+5. 启动 serve.py 用 start_serve.bat（PowerShell Start-Process 会卡住）

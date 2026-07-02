@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from mock_model import MockModel
+from model_adapter import RealModel
 from tools import get_tools_schema, execute_tool
 
 # 全局状态
@@ -32,8 +33,7 @@ def init_model():
     if config["model"]["mock"]:
         model = MockModel(config["model"])
     else:
-        # 后续扩展：DirectML / ONNX / CPU
-        model = MockModel(config["model"])
+        model = RealModel(config["model"])
 
 
 @asynccontextmanager
