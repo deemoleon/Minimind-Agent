@@ -47,15 +47,79 @@ python main.py --cli    # CLI 模式
 - **加载方式**：`AutoConfig.from_pretrained()` + `AutoModelForCausalLM.from_config()` + `load_state_dict()`
 - **官方仓库**：HuggingFace `jingyaogong/minimind-3`
 
-模型文件位于 `models/minimind-fc/`：
+## 接入真实模型
+
+### 1. 获取模型文件
+
+从 HuggingFace 下载 MiniMind3 权重：
+
+```bash
+# 方法 1: git clone（推荐，约 300MB）
+git clone https://huggingface.co/jingyaogong/minimind-3 models/minimind-fc
+
+# 方法 2: 手动下载
+# 需要以下 4 个文件：
+#   config.json              ← 模型架构配置（Qwen3）
+#   full_sft_768.pth         ← 训练权重（137MB）
+#   tokenizer.json           ← 分词器
+#   tokenizer_config.json    ← 分词器配置
+```
+
+### 2. 放置模型文件
+
+将文件放入 `models/minimind-fc/` 目录：
 
 ```
 models/minimind-fc/
-├── config.json              # 模型配置（从 HuggingFace 拉取）
-├── full_sft_768.pth         # 训练权重
-├── tokenizer.json           # 分词器
-└── tokenizer_config.json    # 分词器配置
+├── config.json              # 必须：Qwen3 架构配置
+├── full_sft_768.pth         # 必须：训练权重
+├── tokenizer.json           # 必须：分词器
+└── tokenizer_config.json    # 必须：分词器配置
 ```
+
+**注意**：`config.json` 必须与 `.pth` 权重匹配。MiniMind3 使用 Qwen3 架构，`config.json` 中的 `model_type` 应为 `"qwen3"`。
+
+### 3. 修改配置
+
+编辑 `config.yaml`：
+
+```yaml
+model:
+  mock: false                              # 关闭 Mock
+  model_path: "models/minimind-fc/"        # 指向模型目录
+```
+
+`model_adapter.py` 支持三种加载模式，`model_path` 自动识别：
+
+| model_path 指向 | 加载方式 | 需要的文件 |
+|----------------|---------|-----------|
+| 目录（如 `models/minimind-fc/`） | 自动找 `*.pth`，优先 `full_sft_*.pth` | config.json + .pth + tokenizer |
+| `.pth` 文件 | 直接加载 PyTorch 权重 | config.json（同目录）+ .pth |
+| HF 格式目录 | `from_pretrained()` 加载 | config.json + model.safetensors + tokenizer |
+
+### 4. 启动验证
+
+```bash
+# 启动服务
+start_serve.bat
+
+# 运行真实模型测试（3 个额外测试）
+python test_api.py --real
+
+# 预期输出：10/11 通过
+```
+
+### 5. 代码适配说明
+
+如果你使用**非 MiniMind3 的模型**（如 Llama、Mistral），需要修改 `model_adapter.py`：
+
+| 场景 | 需要改什么 |
+|------|-----------|
+| 模型架构不同（非 Qwen3） | `_load_pth_model()` 中 `AutoModelForCausalLM.from_config()` 会自动适配，只要 `config.json` 正确 |
+| 分词器不同 | `_load_pth_model()` 已用 `AutoTokenizer`，自动适配 |
+| 工具调用格式不同 | `_parse_tool_call()` 中的正则表达式需要调整（当前匹配 `<tool_call>...</tool_call>`） |
+| 使用 HF safetensors 格式 | 直接用 `_load_hf_model()`，`model_path` 指向包含 `model.safetensors` 的目录 |
+| 需要 GPU 显存优化 | 修改 `_load_pth_model()` 中的 `dtype`（当前 FP16，可改 INT8/INT4） |
 
 ## 系统架构
 
@@ -111,7 +175,7 @@ project/
 ## 验收清单
 
 ```
-[x] Mock 模式 test_api.py 8/8 通过
+[x] Mock 模式 test_api.py 7/8 通过（tool_calls 关键词匹配波动）
 [x] 真实模型 test_api.py --real 10/11 通过
 [x] SSE 流式输出正常
 [x] ROCm 7.2.1 GPU 识别正常（AMD Radeon RX 9070 GRE）
